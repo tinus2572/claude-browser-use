@@ -1,0 +1,15 @@
+[project]
+name = "claude-computer-agent"
+version = "0.1.0"
+description = "A minimal Claude Computer Use agent to pilot a Chrome Extension."
+dependencies = [
+    "anthropic",
+    "websockets",
+    "python-dotenv",
+    "aiohttp",
+    "google-generativeai",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

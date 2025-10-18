@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Point & Click Agent",
+  "version": "1.0",
+  "description": "A Chrome extension that can be piloted by an AI agent.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}

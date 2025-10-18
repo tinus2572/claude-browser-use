@@ -1,0 +1,4 @@
+.env
+.venv
+claude_computer_agent.egg-info
+uv.lock
