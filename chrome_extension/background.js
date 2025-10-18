@@ -9,8 +9,7 @@ function connect() {
 
   socket.onmessage = async function(event) {
 
-    // console.log(`[message] Data received from server: ${event.data}`);
-    console.log(event);
+    console.log(`[message] Data received from server: ${event.data}`);
     const data = JSON.parse(event.data);
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -37,42 +36,41 @@ function connect() {
     }
 
     else if (data.action === "click") {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: (x, y) => {
-          // Convert to client coordinates if needed (assuming x/y are page coords)
-          const clientX = x - window.scrollX;
-          const clientY = y - window.scrollY;
+      const { x, y } = data;
+      
+      if (typeof x !== "number" || typeof y !== "number") {
+        console.log("Invalid click coordinates");
+        socket.send(JSON.stringify({ action: "click", error: "Invalid or missing x/y coordinates" }));
+        return;
+      }
     
-          const el = document.elementFromPoint(clientX, clientY);
-          if (!el) {
-            console.warn("No element found at", clientX, clientY);
-            return;
-          }
+      try {
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (x, y) => {
+            const evt = new MouseEvent("click", {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+              clientX: x,
+              clientY: y
+            });
+            const el = document.elementFromPoint(x, y);
+            if (!el) return { success: false, error: "No element at coordinates" };
+            el.dispatchEvent(evt);
+            return { success: true };
+          },
+          args: [x, y]
+        });
     
-          // Create a helper for consistent event options
-          const opts = (type) => ({
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX,
-            clientY,
-            screenX: window.screenX + clientX,
-            screenY: window.screenY + clientY,
-            button: 0,
-          });
-    
-          // Dispatch a realistic click sequence
-          el.dispatchEvent(new MouseEvent("mousemove", opts("mousemove")));
-          el.dispatchEvent(new MouseEvent("mousedown", opts("mousedown")));
-          el.dispatchEvent(new MouseEvent("mouseup", opts("mouseup")));
-          el.dispatchEvent(new MouseEvent("click", opts("click")));
-    
-          console.log("Clicked element at", x, y, el);
-        },
-        args: [data.x, data.y],
-      });
+        socket.send(JSON.stringify({ action: "click", data: result.result }));
+        console.log("[message] Click action executed:", result.result);
+      } catch (err) {
+        console.error("Error executing click:", err);
+        socket.send(JSON.stringify({ action: "click", error: err.message }));
+      }
     }
+    
     //  else if (data.action === "type") {
     //   await chrome.scripting.executeScript({
     //     target: { tabId: tab.id },

@@ -11,21 +11,6 @@ import time
 
 load_dotenv()
 
-async def wait_for_action(websocket, action, timeout=5.0):
-    """Wait for a specific action in the WebSocket messages."""
-    while True:
-        try:
-            msg = await asyncio.wait_for(websocket.recv(), timeout)
-        except asyncio.TimeoutError:
-            raise asyncio.TimeoutError(f"Timeout waiting for action {action}")
-
-        data = json.loads(msg)
-        # Only return if this is the message we want
-        if data.get("action") == action or "screenshot" in data:
-            return data
-        else:
-            print(f"Ignoring unrelated message: {data}")
-
 
 # Set the desired LLM provider: "anthropic" or "gemini"
 LLM_PROVIDER = "gemini"
@@ -41,6 +26,57 @@ class Agent:
         self.messages = []
         self.display_width = 2160
         self.display_height = 1440
+
+    async def wait_for_action(self, action, timeout=5.0):
+        """Wait for a specific action in the WebSocket messages."""
+        while True:
+            try:
+                msg = await asyncio.wait_for(self.websocket.recv(), timeout)
+            except asyncio.TimeoutError:
+                raise asyncio.TimeoutError(f"Timeout waiting for action {action}")
+
+            data = json.loads(msg)
+            # Only return if this is the message we want
+            if data.get("action") == action or "screenshot" in data:
+                return data
+            else:
+                print(f"Ignoring unrelated message: {data}")
+
+    async def perform_tool_action(self, tool_name, tool_input, tool_use_id):
+        print(f"Performing action: {tool_name} with input: {tool_input}")
+        
+        # Send the action
+        await self.websocket.send(json.dumps({"action": tool_name, **tool_input}))
+
+        # Wait for the screenshot of the updated state
+        try:
+            screenshot_json = await self.wait_for_action("screenshot", timeout=5.0)
+            screenshot_b64 = screenshot_json['screenshot'].split(',')[1]
+        except asyncio.TimeoutError:
+            print("Screenshot after action timed out")
+            screenshot_b64 = None
+
+        # Add the tool result + screenshot to messages
+        self.messages.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": screenshot_b64,
+                            },
+                        },
+                        {"type": "text", "text": "Action performed. Here is the new screenshot."}
+                    ]
+                }
+            ]
+        })
 
     async def handle_connection(self, websocket):
         print("Chrome extension connected.")
@@ -95,7 +131,7 @@ class Agent:
         await self.websocket.send(json.dumps({"action": "screenshot"}))
         print("Sent screenshot request")
         try:
-            screenshot_json = await wait_for_action(self.websocket, "screenshot", timeout=5.0)
+            screenshot_json = await self.wait_for_action("screenshot", timeout=5.0)
             print("Received screenshot data")
             screenshot_b64 = screenshot_json['screenshot'].split(',')[1]
         except asyncio.TimeoutError:
@@ -107,7 +143,7 @@ class Agent:
         await self.websocket.send(json.dumps({"action": "dimensions"}))
         print("Sent dimensions request")
         try:
-            dimensions_json = await wait_for_action(self.websocket, "dimensions", timeout=5.0)
+            dimensions_json = await self.wait_for_action("dimensions", timeout=5.0)
             print("Received dimensions data:", dimensions_json)
             width, height = dimensions_json["data"]["width"], dimensions_json["data"]["height"]
         except asyncio.TimeoutError:
@@ -156,29 +192,29 @@ class Agent:
                     "required": ["x", "y", "reason"]
                 }
             },
-            # {
-            #     "name": "type",
-            #     "description": "Types a string of text into a focused input field.",
-            #     "input_schema": {
-            #         "type": "object",
-            #         "properties": {
-            #             "text": {"type": "string", "description": "The text to type."}, 
-            #             "reason": {"type": "string", "description": "The reason for typing this text."} 
-            #         },
-            #         "required": ["text", "reason"]
-            #     }
-            # },
-            # {
-            #     "name": "done",
-            #     "description": "Use this tool to indicate that the task is complete.",
-            #     "input_schema": {
-            #         "type": "object",
-            #         "properties": {
-            #             "reason": {"type": "string", "description": "A summary of how the task was completed."} 
-            #         },
-            #         "required": ["reason"]
-            #     }
-            # }
+            {
+                "name": "type",
+                "description": "Types a string of text into a focused input field.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "The text to type."}, 
+                        "reason": {"type": "string", "description": "The reason for typing this text."} 
+                    },
+                    "required": ["text", "reason"]
+                }
+            },
+            {
+                "name": "done",
+                "description": "Use this tool to indicate that the task is complete.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {"type": "string", "description": "A summary of how the task was completed."} 
+                    },
+                    "required": ["reason"]
+                }
+            }
         ]
 
         while True:
@@ -235,31 +271,7 @@ class Agent:
                         print(f"Task finished. Reason: {tool_input['reason']}")
                         return
 
-                    await self.websocket.send(json.dumps({"action": tool_name, **tool_input}))
-                    
-                    screenshot_data = await self.websocket.recv()
-                    screenshot_b64 = json.loads(screenshot_data)['screenshot'].split(',')[1]
-
-                    self.messages.append({
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": [
-                                    {
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": "image/png",
-                                            "data": screenshot_b64,
-                                        },
-                                    }, 
-                                    {"type": "text", "text": "Action performed. Here is the new screenshot."} 
-                                ], 
-                            }
-                        ],
-                    })
+                    await self.perform_tool_action(tool_name, tool_input, tool_use_id)
             
             if not tool_use_found:
                 print("No tool use found. Task may be complete or agent is stuck.")
