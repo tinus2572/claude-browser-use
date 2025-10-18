@@ -7,8 +7,25 @@ import json
 from dotenv import load_dotenv
 import websockets
 from types import SimpleNamespace
+import time
 
 load_dotenv()
+
+async def wait_for_action(websocket, action, timeout=5.0):
+    """Wait for a specific action in the WebSocket messages."""
+    while True:
+        try:
+            msg = await asyncio.wait_for(websocket.recv(), timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(f"Timeout waiting for action {action}")
+
+        data = json.loads(msg)
+        # Only return if this is the message we want
+        if data.get("action") == action or "screenshot" in data:
+            return data
+        else:
+            print(f"Ignoring unrelated message: {data}")
+
 
 # Set the desired LLM provider: "anthropic" or "gemini"
 LLM_PROVIDER = "gemini"
@@ -67,33 +84,35 @@ class Agent:
                  gemini_messages.append({"role": role, "parts": [{"text": content}]})
 
         return gemini_messages
-
+    
     async def run_agent(self):
         task = input("Please enter the task for the agent: ")
         print(f"Got task: {task}")
 
-        print("Getting initial screenshot...")
-        screenshot_json = None
-        for i in range(5): # 5 attempts, 1 second apart
-            await self.websocket.send(json.dumps({"action": "screenshot"}))
-            print("Sent screenshot request")
-            try:
-                screenshot_data = await asyncio.wait_for(self.websocket.recv(), timeout=10.0)
-                print("Received screenshot data")
-                screenshot_json = json.loads(screenshot_data)
-                if screenshot_json and 'screenshot' in screenshot_json and screenshot_json['screenshot']:
-                    break # Got a valid screenshot
-                else:
-                    print("No active tab found, waiting...")
-            except asyncio.TimeoutError:
-                print("Screenshot request timed out, retrying...")
-            screenshot_json = None # Reset if invalid or timed out
 
-        if not screenshot_json:
-            print("Error: Failed to get a screenshot after 5 seconds. No active tab?")
+        # Screenshot
+        print("Getting initial screenshot...")
+        await self.websocket.send(json.dumps({"action": "screenshot"}))
+        print("Sent screenshot request")
+        try:
+            screenshot_json = await wait_for_action(self.websocket, "screenshot", timeout=5.0)
+            print("Received screenshot data")
+            screenshot_b64 = screenshot_json['screenshot'].split(',')[1]
+        except asyncio.TimeoutError:
+            print("Screenshot request timed out, retrying...")
             return
 
-        screenshot_b64 = screenshot_json['screenshot'].split(',')[1]
+        # Dimensions (after screenshot finishes)
+        print("Requesting tab dimensions...")
+        await self.websocket.send(json.dumps({"action": "dimensions"}))
+        print("Sent dimensions request")
+        try:
+            dimensions_json = await wait_for_action(self.websocket, "dimensions", timeout=5.0)
+            print("Received dimensions data:", dimensions_json)
+            width, height = dimensions_json["data"]["width"], dimensions_json["data"]["height"]
+        except asyncio.TimeoutError:
+            print("Dimensions request timed out")
+            return
 
         self.messages = [
             {
@@ -111,7 +130,7 @@ class Agent:
                         "type": "text",
                         "text": f"""
                         You are an agent controlling a browser. You are given a screenshot of the current page.
-                        The screen resolution is {self.display_width}x{self.display_height}.
+                        The screen resolution is {width}x{height}.
                         Your goal is to complete the task by using the available tools.
 
                         Task: {task}
@@ -124,19 +143,19 @@ class Agent:
         ]
 
         tools = [
-            # {
-            #     "name": "click",
-            #     "description": "Clicks on a specific coordinate on the screen.",
-            #     "input_schema": {
-            #         "type": "object",
-            #         "properties": {
-            #             "x": {"type": "number", "description": "The x-coordinate to click."}, 
-            #             "y": {"type": "number", "description": "The y-coordinate to click."}, 
-            #             "reason": {"type": "string", "description": "The reason for clicking at this coordinate."} 
-            #         },
-            #         "required": ["x", "y", "reason"]
-            #     }
-            # },
+            {
+                "name": "click",
+                "description": "Clicks on a specific coordinate on the screen.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "number", "description": "The x-coordinate to click."}, 
+                        "y": {"type": "number", "description": "The y-coordinate to click."}, 
+                        "reason": {"type": "string", "description": "The reason for clicking at this coordinate."} 
+                    },
+                    "required": ["x", "y", "reason"]
+                }
+            },
             # {
             #     "name": "type",
             #     "description": "Types a string of text into a focused input field.",
