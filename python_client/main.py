@@ -1,7 +1,6 @@
 import asyncio
 import anthropic
 import google.generativeai as genai
-import base64
 import os
 import json
 from dotenv import load_dotenv
@@ -13,7 +12,7 @@ load_dotenv()
 
 
 # Set the desired LLM provider: "anthropic" or "gemini"
-LLM_PROVIDER = "gemini"
+LLM_PROVIDER = "anthropic"
 
 class Agent:
     def __init__(self):
@@ -24,8 +23,6 @@ class Agent:
             self.gemini_client = genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
         self.websocket = None
         self.messages = []
-        self.display_width = 2160
-        self.display_height = 1440
 
     async def wait_for_action(self, action, timeout=5.0):
         """Wait for a specific action in the WebSocket messages."""
@@ -39,19 +36,17 @@ class Agent:
             # Only return if this is the message we want
             if data.get("action") == action or "screenshot" in data:
                 return data
-            # else:
-            #     print(f"Ignoring unrelated message: {data}")
-
+            
     async def perform_tool_action(self, tool_name, tool_input, tool_use_id):
         print(f"Performing action: {tool_name} with input: {tool_input}")
         
         # Send the action
         await self.websocket.send(json.dumps({"action": tool_name, **tool_input}))
 
-        time.sleep(1)
-        
-        # Screenshot
-        print("Getting initial screenshot...")
+        # Leave enough time for updates (i.e. if the action involved changing pages)
+        time.sleep(2)
+
+        # Screenshot of the situation after the action
         await self.websocket.send(json.dumps({"action": "screenshot"}))
         print("Sent screenshot request")
         try:
@@ -78,7 +73,9 @@ class Agent:
                                 "data": screenshot_b64,
                             },
                         },
-                        {"type": "text", "text": "Action performed. Here is the new screenshot."}
+                        {   "type": "text", 
+                            "text": "Action performed. Here is the new screenshot."
+                        }
                     ]
                 }
             ]
@@ -233,6 +230,18 @@ class Agent:
                     },
                     "required": ["reason"]
                 }
+            },
+            {
+                "name": "key",
+                "description": "Presses a key or a combination of keys (e.g., 'a', 'Enter', 'ctrl+s').",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "description": "The key or key combination to press."},
+                        "reason": {"type": "string", "description": "The reason for pressing this key."}
+                    },
+                    "required": ["key", "reason"]
+                }
             }
         ]
 
@@ -241,7 +250,7 @@ class Agent:
             print("\nThinking...")
             if self.llm_provider == "anthropic":
                 response = self.anthropic_client.messages.create(
-                    model="claude-3-opus-20240229",
+                    model="claude-opus-4-1",
                     max_tokens=4096,
                     messages=self.messages,
                     tools=tools,
