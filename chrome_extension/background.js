@@ -240,11 +240,37 @@ function connect() {
     }    
 
     else if (data.action === "mouse_move") {
-      //////////////////////////////////:
+      //////////////////////////////////
     }
 
     else if (data.action === "wait") {
       await new Promise(resolve => setTimeout(resolve, data.duration));
+    }
+
+    else if (data.action === "scroll") {
+      try {
+
+        // Extract parameters
+        const [x, y] = data.coordinate || [0, 0];
+        const direction = data.scroll_direction || "down";
+        const amount = Number(data.scroll_amount) || 100;
+
+        // Compute scroll delta
+        const deltaY = direction === "up" ? -amount : amount;
+
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (x, y, deltaY) => {
+            window.scrollTo({ top: y + deltaY, left: x, behavior: "smooth" });
+          },
+          args: [x, y, deltaY]
+        });
+
+        socket.send(JSON.stringify({ action: "scroll", data: true }));
+  } catch (err) {
+    console.error("Error executing scroll:", err);
+    socket.send(JSON.stringify({ action: "scroll", error: err.message }));
+  }
     }
   };
 
